@@ -557,8 +557,10 @@ class QUICK_SWORD_TEXTURE_OT_update_texture_file4(Operator):
             set_colorspace(emission_node, 'sRGB')
             set_udim(emission_node, context.scene.custom_material_props.use_udim)
             links.new(emission_node.outputs['Color'], principled_node.inputs['Emission Color'])
+            principled_node.inputs['Emission Strength'].default_value = 1  # 设置 Emission Strength 为 1
         else:
             remove_texture_node("emission_texture_node")
+            principled_node.inputs['Emission Strength'].default_value = 0  # 设置 Emission Strength 为 0
 
         # Processing Specular Texture
         specular_texture = context.scene.custom_material_props.specular_texture
