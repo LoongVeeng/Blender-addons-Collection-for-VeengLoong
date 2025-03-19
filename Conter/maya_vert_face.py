@@ -1,7 +1,9 @@
+
+
 import bpy
 import gpu
 import bmesh
-from bpy.types import Operator
+from bpy.types import Operator, Panel
 from gpu_extras.batch import batch_for_shader
 from mathutils import Vector, Matrix
 
@@ -26,8 +28,9 @@ class VertexFaceDisplayData:
 
     def reset(self):
         self.draw_handler = None
-        self.active_object = None
+        self.active_objects = None  # 修改为存储多个对象
         self.draw_data = None
+        self.vertex_data = None
 
     @classmethod
     def get(cls):
@@ -84,7 +87,7 @@ def get_vertex_draw_data(context, obj):
 
     bm.free()
     return coords, colors
-    
+
 def get_face_draw_data(context, obj):
     if not obj or obj.type != 'MESH':
         return None
@@ -131,7 +134,7 @@ def get_face_draw_data(context, obj):
     bm.free()
     return wireframe_coords, wireframe_colors, fill_coords, fill_colors
 
-def draw_callback_px(context, obj):
+def draw_callback_px(context): # 修改函数参数
     data = VertexFaceDisplayData.get()
     if not data.draw_data and not data.vertex_data:  # 修改条件
         return
@@ -142,21 +145,22 @@ def draw_callback_px(context, obj):
     # 启用深度测试
     gpu.state.depth_test_set('LESS_EQUAL')
 
-    if data.draw_data:
-        wireframe_coords, wireframe_colors, fill_coords, fill_colors = data.draw_data
+    for obj in data.active_objects: # 遍历所有活动对象
+        if obj.name in data.draw_data: # 判断是否在字典中
+            wireframe_coords, wireframe_colors, fill_coords, fill_colors = data.draw_data[obj.name]
 
-        if fill_coords:
-            batch = batch_for_shader(shader, 'TRIS', {"position": fill_coords, "color": fill_colors})
+            if fill_coords:
+                batch = batch_for_shader(shader, 'TRIS', {"position": fill_coords, "color": fill_colors})
+                batch.draw(shader)
+
+            if wireframe_coords:
+                batch = batch_for_shader(shader, 'LINES', {"position": wireframe_coords, "color": wireframe_colors})
+                batch.draw(shader)
+
+        if obj.name in data.vertex_data: # 判断是否在字典中
+            vertex_coords, vertex_colors = data.vertex_data[obj.name]
+            batch = batch_for_shader(shader, 'POINTS', {"position": vertex_coords, "color": vertex_colors})
             batch.draw(shader)
-
-        if wireframe_coords:
-            batch = batch_for_shader(shader, 'LINES', {"position": wireframe_coords, "color": wireframe_colors})
-            batch.draw(shader)
-
-    if data.vertex_data:
-        vertex_coords, vertex_colors = data.vertex_data
-        batch = batch_for_shader(shader, 'POINTS', {"position": vertex_coords, "color": vertex_colors})
-        batch.draw(shader)
 
 # 操作符
 class OBJECT_OT_vertex_face_display(Operator):
@@ -168,9 +172,17 @@ class OBJECT_OT_vertex_face_display(Operator):
         data = VertexFaceDisplayData.get()
         selected_objects = context.selected_objects  # 获取选定的对象
 
-        if not selected_objects:
-            self.report({'WARNING'}, "请选择一个或多个对象")
-            return {'CANCELLED'}
+        if context.mode == 'EDIT_MESH':
+            # 在编辑模式下，获取场景中所有的网格对象
+            all_mesh_objects = [obj for obj in bpy.data.objects if obj.type == 'MESH']
+            if not all_mesh_objects:
+                self.report({'WARNING'}, "场景中没有网格对象")
+                return {'CANCELLED'}
+            selected_objects = all_mesh_objects
+        else:
+            if not selected_objects:
+                self.report({'WARNING'}, "请选择一个或多个对象")
+                return {'CANCELLED'}
 
         data.reset()
         data.active_objects = selected_objects  # 存储选定的对象
@@ -181,48 +193,66 @@ class OBJECT_OT_vertex_face_display(Operator):
             self.original_hide_viewports[obj] = obj.hide_viewport
             obj.hide_viewport = True
 
-        if context.mode == 'EDIT_MESH' and len(selected_objects) == 1 and selected_objects[0].type == 'MESH':
-            data.draw_data = get_face_draw_data(context, selected_objects[0])
-            data.vertex_data = get_vertex_draw_data(context, selected_objects[0])  # 添加顶点数据
-        elif len(selected_objects) == 1 and selected_objects[0].type == 'MESH':
-            data.draw_data = get_face_draw_data(context, selected_objects[0])
-            data.vertex_data = get_vertex_draw_data(context, selected_objects[0])  # 添加顶点数据
-        else:
-            data.draw_data = None
-            data.vertex_data = None  # 如果选定的对象不是单个网格，则不绘制
+        data.draw_data = {} # 修改为字典存储
+        data.vertex_data = {} # 修改为字典存储
+
+        for obj in selected_objects: # 遍历所有对象
+            if obj.type == 'MESH':
+                draw_data = get_face_draw_data(context, obj)
+                vertex_data = get_vertex_draw_data(context, obj)
+                if draw_data:
+                    data.draw_data[obj.name] = draw_data
+                if vertex_data:
+                    data.vertex_data[obj.name] = vertex_data
 
         if data.draw_handler:
             bpy.types.SpaceView3D.draw_handler_remove(data.draw_handler, 'WINDOW')
 
         if data.draw_data or data.vertex_data:  # 修改条件
-            args = (context, selected_objects[0])  # 仅使用第一个选定的对象进行绘制
+            args = (context,)  # 修改参数
             data.draw_handler = bpy.types.SpaceView3D.draw_handler_add(draw_callback_px, args, 'WINDOW', 'POST_VIEW')
 
             context.window_manager.modal_handler_add(self)
+            context.scene.vertex_face_display_enabled = True # 启用场景属性
             return {'RUNNING_MODAL'}
         else:
             return {'CANCELLED'}
 
+    def cancel(self, context):
+        data = VertexFaceDisplayData.get()
+        if data.draw_handler:
+            bpy.types.SpaceView3D.draw_handler_remove(data.draw_handler, 'WINDOW')
+        data.reset()
+
+        # 显示原始对象
+        if hasattr(self, 'original_hide_viewports'):
+            for obj, hide_viewport in self.original_hide_viewports.items():
+                obj.hide_viewport = hide_viewport
+
+        context.scene.vertex_face_display_enabled = False # 关闭场景属性
+        return {'CANCELLED'}
+
     def modal(self, context, event):
+        if not context.scene.vertex_face_display_enabled: # 检查场景属性
+            return self.cancel(context)
+
         if event.type == 'ESC':
-            data = VertexFaceDisplayData.get()
-            if data.draw_handler:
-                bpy.types.SpaceView3D.draw_handler_remove(data.draw_handler, 'WINDOW')
-            data.reset()
-
-            # 显示原始对象
-            if hasattr(self, 'original_hide_viewports'):
-                for obj, hide_viewport in self.original_hide_viewports.items():
-                    obj.hide_viewport = hide_viewport
-
-            return {'CANCELLED'}
+            return self.cancel(context)
         return {'PASS_THROUGH'}
+        
+    ########layout.prop(context.scene, "vertex_face_display_enabled", text="启用顶点/面显示")退出模态操作
+
+
+
 
 # 快捷键映射
 addon_keymaps = []
 
 def register():
     bpy.utils.register_class(OBJECT_OT_vertex_face_display)
+
+    bpy.types.Scene.vertex_face_display_enabled = bpy.props.BoolProperty(name="顶点/面显示启用", default=False) # 添加场景属性
+
     wm = bpy.context.window_manager
     kc = wm.keyconfigs.addon
     if kc:
@@ -232,7 +262,9 @@ def register():
 
 def unregister():
     bpy.utils.unregister_class(OBJECT_OT_vertex_face_display)
+
+    del bpy.types.Scene.vertex_face_display_enabled # 移除场景属性
+
     for km, kmi in addon_keymaps:
         km.keymap_items.remove(kmi)
     addon_keymaps.clear()
-
