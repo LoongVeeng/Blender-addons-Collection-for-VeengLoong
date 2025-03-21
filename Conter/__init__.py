@@ -1,30 +1,55 @@
+from . import(
+    maya_soft_select,
+    maya_vert_face,
+    maya_from_object,
+    maya_piemenu,
+    camera,
+    material_panel,
+    keycore
+    )
+
 bl_info = {
-    "name": "MaYaTools",
-    "blender": (2, 80, 0),
-    "category": "Material",
-    "location": "View3D > Sidebar > Edit Tab / Edit Mode Context Menu",
+    "name": "Maya Tool",
+    "description": "An interactive tool for merging vertices.",
+    "author": "VeengLoong/騳虤",
+    "version": (1, 6, 9),
+    "blender": (3, 6, 5),
+    "location": "View3D > TOOLS > Merge Tool",
     "warning": "",
-    "description": "小工具",
-    "doc_url": "https://github.com/LoongVeeng/Blender-addons-Collection-for-VeengLoong/tree/main/Conter",
-    "category": "Mesh",
+    "wiki_url": "https://github.com/Stromberg90/Scripts/tree/master/Blender",
+    "tracker_url": "https://github.com/Stromberg90/Scripts/issues",
+    "category": "Tool"
 }
 
-import bpy
-from . import material_panel
-from . import camera
-from . import maya_soft_select,maya_vert_face
-
-
 def register():
-    material_panel.register()
-    camera.register()
     maya_soft_select.register()
+
     maya_vert_face.register()
+    
+    maya_from_object.register()
+    maya_piemenu.register()
+    
+    camera.register()
+    material_panel.register()
+    
+    keycore.disable_default_keymaps()
+    keycore.register_keymaps()
+
+
 
 def unregister():
+    keycore.unregister_keymaps()
+    keycore.enable_default_keymaps()
+    
     material_panel.unregister()
     camera.unregister()
+    maya_piemenu.unregister()
+    maya_from_object.unregister()
     maya_vert_face.unregister()
     maya_soft_select.unregister()
+
+
+
+
 if __name__ == "__main__":
     register()

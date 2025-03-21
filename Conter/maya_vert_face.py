@@ -228,7 +228,11 @@ class OBJECT_OT_vertex_face_display(Operator):
         if hasattr(self, 'original_hide_viewports'):
             for obj, hide_viewport in self.original_hide_viewports.items():
                 obj.hide_viewport = hide_viewport
-
+        # 选中显示的对象
+        if data.active_objects:
+            bpy.ops.object.select_all(action='DESELECT')
+            for obj in data.active_objects:
+                obj.select_set(True)
         context.scene.vertex_face_display_enabled = False # 关闭场景属性
         return {'CANCELLED'}
 

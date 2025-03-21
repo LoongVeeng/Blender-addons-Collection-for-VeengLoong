@@ -42,6 +42,9 @@ class SoftSelectionData:
         self.radius = 0.0
         self.prev_radius = 0.0
         self.b_release_time = 0.0
+        self.affected_faces = []  # 新增：记录受影响的面
+        self.last_draw_time = 0  # 新增：记录上次绘制时间
+        self.prev_viewport_matrix = None  # 新增：记录上一次视口矩阵
 
     @classmethod
     def get(cls):
@@ -54,11 +57,12 @@ class SoftSelectionData:
 
 vert_shader = '''
 uniform mat4 ModelViewProjectionMatrix;
+uniform mat4 ObjectMatrix;
 in vec3 position;
 in vec4 color;
 out vec4 vColor;
 void main(){
-    gl_Position = ModelViewProjectionMatrix * vec4(position, 1.0);
+    gl_Position = ModelViewProjectionMatrix * ObjectMatrix * vec4(position, 1.0);
     vColor = color;
 }
 '''
@@ -102,7 +106,7 @@ def calculate_falloff(d, r):
     return color
 
 
-def get_draw_data(bm, center, eff_r, mode):
+def get_draw_data(bm, center, eff_r, mode, data):
     coords, colors = [], []
     if mode == 'VERT':
         for v in bm.verts:
@@ -121,13 +125,16 @@ def get_draw_data(bm, center, eff_r, mode):
                 colors.extend([calculate_falloff(d1, eff_r), calculate_falloff(d2, eff_r)])
         bt = 'LINES'
     elif mode == 'FACE':
-        # 实时计算面的偏移顶点数据
-        face_data = {}
+        data.affected_faces = []
         for f in bm.faces:
             if any((v.co - center).length_squared <= eff_r ** 2 for v in f.verts):
-                face_center = sum((v.co for v in f.verts), Vector()) / len(f.verts)
-                moved_verts = [v.co + (face_center - v.co) * 0.05 for v in f.verts]
-                face_data[f] = (face_center, moved_verts)
+                data.affected_faces.append(f)
+
+        face_data = {}
+        for f in data.affected_faces:
+            face_center = sum((v.co for v in f.verts), Vector()) / len(f.verts)
+            moved_verts = [v.co + (face_center - v.co) * 0.05 for v in f.verts]
+            face_data[f] = (face_center, moved_verts)
 
         for f, (face_center, moved_verts) in face_data.items():
             if len(moved_verts) == 3:
@@ -164,7 +171,8 @@ def calc_locked_selection(context, bm, mode, radius):
     center, max_d = get_selection_center(bm)
     if center is None: return None, None, 0.0
     eff_r = max_d + radius
-    locked = get_draw_data(bm, center, eff_r, mode)
+    data = SoftSelectionData.get()
+    locked = get_draw_data(bm, center, eff_r, mode, data)
     return locked, center, max_d
 
 
@@ -176,21 +184,36 @@ def draw_soft_selection(context):
     bm = bmesh.from_edit_mesh(obj.data)
     data = SoftSelectionData.get()
 
+    # 依据当前的网格选择模式更新 draw_mode
+    select_mode = context.tool_settings.mesh_select_mode
+    if select_mode[0]:
+        data.draw_mode = 'VERT'
+    elif select_mode[1]:
+        data.draw_mode = 'EDGE'
+    elif select_mode[2]:
+        data.draw_mode = 'FACE'
+
+    # 检查视口矩阵是否变化
+    current_viewport_matrix = context.region_data.perspective_matrix.copy()
+    if data.prev_viewport_matrix is None or current_viewport_matrix != data.prev_viewport_matrix:
+        data.update_draw = True
+        data.prev_viewport_matrix = current_viewport_matrix
+
     # 面模式强制实时计算，其他模式使用缓存
-    if data.draw_mode == 'FACE' or data.update_draw:
-        if data.locked_selection:
-            coords, colors, bt = data.locked_selection
+    current_time = time.time()
+    if data.draw_mode == 'FACE' or (data.update_draw and current_time - data.last_draw_time > 0.1):
+        center, max_d = get_selection_center(bm)
+        if center is None: return
+        if data.state == data.ADJUSTING:
+            # 调整时使用圆环半径对应的影响半径
+            eff_r = max_d + get_proportional_distance(data.radius)
         else:
-            center, max_d = get_selection_center(bm)
-            if center is None: return
-            if data.state == data.ADJUSTING:
-                # 调整时使用圆环半径对应的影响半径
-                eff_r = max_d + get_proportional_distance(data.radius)
-            else:
-                eff_r = max_d + context.scene.tool_settings.proportional_size
-            coords, colors, bt = get_draw_data(bm, center, eff_r, data.draw_mode)
+            eff_r = max_d + context.scene.tool_settings.proportional_size
+        coords, colors, bt = get_draw_data(bm, center, eff_r, data.draw_mode, data)
         data.draw_data = (coords, colors, bt)
         data.update_draw = False
+        data.last_draw_time = current_time
+
     else:
         if not hasattr(data, 'draw_data') or data.draw_data is None: return
         coords, colors, bt = data.draw_data
@@ -199,6 +222,7 @@ def draw_soft_selection(context):
         batch = batch_for_shader(shader, bt, {"position": coords, "color": colors})
         shader.bind()
         shader.uniform_float("ModelViewProjectionMatrix", context.region_data.perspective_matrix)
+        shader.uniform_float("ObjectMatrix", obj.matrix_world)
         batch.draw(shader)
 
 
@@ -209,7 +233,10 @@ def draw_radius_ring(context):
         return
     region = context.region
     rv3d = context.region_data
-    center_2d = _3d_to_2d(region, rv3d, data.center)
+    obj = context.edit_object  # 修正：添加 obj 定义
+    center_3d = data.center
+    center_3d = obj.matrix_world @ center_3d
+    center_2d = _3d_to_2d(region, rv3d, center_3d)
 
     if not center_2d:
         return
@@ -308,7 +335,10 @@ class VIEW3D_OT_MaYa_soft_selection(bpy.types.Operator):
         """更新半径值（确保Vector类型）"""
         region = context.region
         rv3d = context.region_data
-        center_2d = _3d_to_2d(region, rv3d, self.data.center)
+        obj = context.edit_object
+        center_3d = self.data.center
+        center_3d = obj.matrix_world @ center_3d
+        center_2d = _3d_to_2d(region, rv3d, center_3d)
 
         if not center_2d:
             print("Warning: Failed to calculate 2D center for radius update.")
@@ -437,6 +467,15 @@ class VIEW3D_OT_MaYa_soft_selection(bpy.types.Operator):
 
     def execute(self, context):
         context.scene.tool_settings.use_proportional_edit = True
+        # 依据当前的网格选择模式设定 draw_mode
+        select_mode = context.tool_settings.mesh_select_mode
+        if select_mode[0]:
+            self.data.draw_mode = 'VERT'
+        elif select_mode[1]:
+            self.data.draw_mode = 'EDGE'
+        elif select_mode[2]:
+            self.data.draw_mode = 'FACE'
+
         if not self.data.overlay_handler:
             self.data.overlay_handler = bpy.types.SpaceView3D.draw_handler_add(draw_soft_selection, (context,),
                                                                                'WINDOW', 'POST_VIEW')
@@ -464,19 +503,10 @@ class VIEW3D_OT_MaYa_soft_selection(bpy.types.Operator):
 
 def register():
     bpy.utils.register_class(VIEW3D_OT_MaYa_soft_selection)
-    bpy.context.window_manager.keyconfigs.addon.keymaps.new(name="Mesh", space_type='EMPTY', region_type='WINDOW',
-                                                            modal=False).keymap_items.new("view3d.maya_soft_selection",
-                                                                                          type="B", value="CLICK")
 
 
 def unregister():
     bpy.utils.unregister_class(VIEW3D_OT_MaYa_soft_selection)
-
-    for km in bpy.context.window_manager.keyconfigs.addon.keymaps:
-        for kmi in km.keymap_items:
-            if kmi.idname == "view3d.maya_soft_selection" and kmi.type == 'B':
-                km.keymap_items.remove(kmi)
-                break
 
 
 if __name__ == "__main__":
