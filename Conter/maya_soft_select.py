@@ -1,12 +1,11 @@
-import bpy, bmesh, math
+import bpy
+import bmesh
+import math
 import time
-
 from mathutils import Vector
-
-import gpu, bgl
-
+import gpu
+import bgl
 from gpu_extras.batch import batch_for_shader
-
 import blf
 
 
@@ -30,11 +29,11 @@ class SoftSelectionData:
         self.mmb_pressed = False
         self.mmb_released = False
         self.b_released = False
-        self.b_clicked = False  # 添加 B 键单击状态
+        self.b_clicked = False
         self.ring_handler = None
         self.overlay_handler = None
         self.text_handler = None
-        self.draw_mode = 'VERT'  # 'VERT', 'EDGE' 或 'FACE'
+        self.draw_mode = 'VERT'
         self.locked_selection = None
         self.update_draw = True
         self.state = self.MAIN
@@ -42,9 +41,9 @@ class SoftSelectionData:
         self.radius = 0.0
         self.prev_radius = 0.0
         self.b_release_time = 0.0
-        self.affected_faces = []  # 新增：记录受影响的面
-        self.last_draw_time = 0  # 新增：记录上次绘制时间
-        self.prev_viewport_matrix = None  # 新增：记录上一次视口矩阵
+        self.affected_faces = []
+        self.last_draw_time = 0
+        self.prev_viewport_matrix = None
 
     @classmethod
     def get(cls):
@@ -82,7 +81,8 @@ shader = gpu.types.GPUShader(vert_shader, frag_shader)
 
 def get_selection_center(bm):
     verts = [v for v in bm.verts if v.select]
-    if not verts: return None, 0.0
+    if not verts:
+        return None, 0.0
     center = sum((v.co for v in verts), Vector()) / len(verts)
     max_d = max((v.co - center).length for v in verts)
     return center, max_d
@@ -91,16 +91,12 @@ def get_selection_center(bm):
 def calculate_falloff(d, r):
     t = d / r
     if t < 0.25:
-        # 红 -> 橙
         color = (1, t * 4, 0, 0.8 + 0.2 * (1 - t))
     elif t < 0.5:
-        # 橙 -> 黄
         color = (1 - (t - 0.25) * 4, 1, 0, 0.8 + 0.2 * (1 - t))
     elif t < 0.75:
-        # 黄 -> 绿
         color = (0, 1 - (t - 0.5) * 4, 0, 0.8 + 0.2 * (1 - t))
     else:
-        # 绿 -> 深绿灰色
         gray = 1 - (t - 0.75) * 4
         color = (gray * 0.2, gray * 0.3, gray * 0.2, 0.8 + 0.2 * (1 - t))
     return color
@@ -169,7 +165,8 @@ def get_draw_data(bm, center, eff_r, mode, data):
 
 def calc_locked_selection(context, bm, mode, radius):
     center, max_d = get_selection_center(bm)
-    if center is None: return None, None, 0.0
+    if center is None:
+        return None, None, 0.0
     eff_r = max_d + radius
     data = SoftSelectionData.get()
     locked = get_draw_data(bm, center, eff_r, mode, data)
@@ -180,11 +177,11 @@ def calc_locked_selection(context, bm, mode, radius):
 
 def draw_soft_selection(context):
     obj = context.edit_object
-    if not obj or obj.type != 'MESH' or context.mode != 'EDIT_MESH': return
+    if not obj or obj.type != 'MESH' or context.mode != 'EDIT_MESH':
+        return
     bm = bmesh.from_edit_mesh(obj.data)
     data = SoftSelectionData.get()
 
-    # 依据当前的网格选择模式更新 draw_mode
     select_mode = context.tool_settings.mesh_select_mode
     if select_mode[0]:
         data.draw_mode = 'VERT'
@@ -193,19 +190,17 @@ def draw_soft_selection(context):
     elif select_mode[2]:
         data.draw_mode = 'FACE'
 
-    # 检查视口矩阵是否变化
     current_viewport_matrix = context.region_data.perspective_matrix.copy()
     if data.prev_viewport_matrix is None or current_viewport_matrix != data.prev_viewport_matrix:
         data.update_draw = True
         data.prev_viewport_matrix = current_viewport_matrix
 
-    # 面模式强制实时计算，其他模式使用缓存
     current_time = time.time()
     if data.draw_mode == 'FACE' or (data.update_draw and current_time - data.last_draw_time > 0.1):
         center, max_d = get_selection_center(bm)
-        if center is None: return
+        if center is None:
+            return
         if data.state == data.ADJUSTING:
-            # 调整时使用圆环半径对应的影响半径
             eff_r = max_d + get_proportional_distance(data.radius)
         else:
             eff_r = max_d + context.scene.tool_settings.proportional_size
@@ -213,9 +208,9 @@ def draw_soft_selection(context):
         data.draw_data = (coords, colors, bt)
         data.update_draw = False
         data.last_draw_time = current_time
-
     else:
-        if not hasattr(data, 'draw_data') or data.draw_data is None: return
+        if not hasattr(data, 'draw_data') or data.draw_data is None:
+            return
         coords, colors, bt = data.draw_data
 
     if coords:
@@ -228,12 +223,11 @@ def draw_soft_selection(context):
 
 def draw_radius_ring(context):
     data = SoftSelectionData.get()
-    # 添加对衰减编辑状态的检查
     if not context.scene.tool_settings.use_proportional_edit or data.state != data.ADJUSTING or data.radius <= 0:
         return
     region = context.region
     rv3d = context.region_data
-    obj = context.edit_object  # 修正：添加 obj 定义
+    obj = context.edit_object
     center_3d = data.center
     center_3d = obj.matrix_world @ center_3d
     center_2d = _3d_to_2d(region, rv3d, center_3d)
@@ -252,7 +246,6 @@ def draw_radius_ring(context):
     batch.draw(shader)
     gpu.state.blend_set('NONE')
 
-    # 更新衰减编辑范围的大小数值
     bpy.context.scene.tool_settings.proportional_distance = get_proportional_distance(data.radius)
 
 
@@ -272,7 +265,6 @@ def draw_text_callback(context):
 
 
 def _3d_to_2d(region, rv3d, point):
-    """将3D坐标转换为2D屏幕坐标（返回Vector）"""
     prj = rv3d.perspective_matrix @ Vector((*point, 1))
     if prj.w <= 0:
         return None
@@ -291,10 +283,105 @@ def _generate_circle_points(center_2d, radius, grid_scale, segments=64):
     ]
 
 
-# 新增函数，统一控制圆环与衰减编辑之间的映射关系
 def get_proportional_distance(radius):
-    # 这里可以根据需要调整映射关系
-    return radius / 20  # 根据你反馈的比例调整
+    return radius / 20
+
+
+# ----------------------- 操作符辅助函数 -----------------------
+
+def update_header(context, data):
+    state_text = "主状态" if data.state == data.MAIN else "调整状态"
+    header = f"Maya软选择 | 状态：{state_text} | 模式：{'选择'} | 网格模式：{data.draw_mode} | [1]点 [2]边 [3]面"
+    context.area.header_text_set(header)
+
+
+def init_adjustment(context, event, data, reset_radius=True):
+    obj = context.edit_object
+    bm = bmesh.from_edit_mesh(obj.data)
+    data.center = get_selection_center(bm)[0]
+    if not data.center:
+        return False
+
+    data.drag_start_pos = Vector((event.mouse_region_x, event.mouse_region_y))
+    if reset_radius:
+        data.radius = 0.0
+        data.prev_radius = 0.0
+        bpy.context.scene.tool_settings.proportional_distance = 0
+    data.update_draw = True
+    context.area.tag_redraw()
+    return True
+
+
+def update_radius(context, event, data):
+    region = context.region
+    rv3d = context.region_data
+    obj = context.edit_object
+    center_3d = data.center
+    center_3d = obj.matrix_world @ center_3d
+    center_2d = _3d_to_2d(region, rv3d, center_3d)
+
+    if not center_2d:
+        print("Warning: Failed to calculate 2D center for radius update.")
+        return
+
+    current_pos = Vector((event.mouse_region_x, event.mouse_region_y))
+    delta = current_pos - center_2d
+
+    scale_factor = context.space_data.overlay.grid_scale * 0.1
+    new_radius = delta.length * scale_factor
+
+    if new_radius < data.radius:
+        data.radius = new_radius
+    else:
+        min_increase = 0.1
+        if new_radius - data.radius < min_increase:
+            new_radius = data.radius + min_increase
+        data.radius += (new_radius - data.radius) * 0.1
+
+    data.update_draw = True
+    context.area.tag_redraw()
+
+
+def finalize_adjustment(context, data):
+    bpy.context.scene.tool_settings.proportional_distance = get_proportional_distance(data.radius)
+    data.radius = 0.0
+    if data.ring_handler:
+        bpy.types.SpaceView3D.draw_handler_remove(data.ring_handler, 'WINDOW')
+        data.ring_handler = None
+    if data.text_handler:
+        bpy.types.SpaceView3D.draw_handler_remove(data.text_handler, 'WINDOW')
+        data.text_handler = None
+    data.state = data.MAIN
+    data.update_draw = True
+    context.area.tag_redraw()
+    update_header(context, data)
+
+
+def update_data_state(context, event, data, db_time):
+    if event.type == 'B':
+        if event.value == 'PRESS':
+            current_time = time.time()
+            if data.b_released and current_time - data.b_release_time < db_time:
+                data.b_double_clicked = True
+                return {'CANCELLED'}
+            else:
+                data.b_clicked = True
+                data.b_pressed = True
+                data.b_released = False
+        elif event.value == 'RELEASE':
+            data.b_pressed = False
+            data.b_released = True
+            data.b_release_time = time.time()
+            data.b_double_clicked = False
+            data.b_clicked = False
+    if event.type == 'MIDDLEMOUSE':
+        if event.value == 'PRESS':
+            data.mmb_pressed = True
+            data.mmb_released = False
+        elif event.value == 'RELEASE':
+            data.mmb_pressed = False
+            data.mmb_released = True
+    return None
 
 
 # ----------------------- 主操作符 -----------------------
@@ -303,105 +390,12 @@ class VIEW3D_OT_MaYa_soft_selection(bpy.types.Operator):
     bl_idname = "view3d.maya_soft_selection"
     bl_label = "Maya Soft Selection"
     _timer = None
-    db_time = 1.0  # 添加 db_time 参数
+    db_time = 1.0
 
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)  # 关键修正：调用父类构造函数
         self.data = SoftSelectionData.get()
-
-    def update_header(self, context):
-        state_text = "主状态" if self.data.state == self.data.MAIN else "调整状态"
-        header = f"Maya软选择 | 状态：{state_text} | 模式：{'选择'} | 网格模式：{self.data.draw_mode} | [1]点 [2]边 [3]面"
-        context.area.header_text_set(header)
-
-    def _init_adjustment(self, context, event, reset_radius=True):
-        """初始化调整参数（正确获取鼠标位置）"""
-        obj = context.edit_object
-        bm = bmesh.from_edit_mesh(obj.data)
-        self.data.center = get_selection_center(bm)[0]
-        if not self.data.center:
-            return False
-
-        self.data.drag_start_pos = Vector((event.mouse_region_x, event.mouse_region_y))
-        if reset_radius:
-            self.data.radius = 0.0
-            self.data.prev_radius = 0.0
-            # 初始化时，将当前比例编辑距离设为 0
-            bpy.context.scene.tool_settings.proportional_distance = 0
-        self.data.update_draw = True  # 标记需要更新绘制数据
-        context.area.tag_redraw()  # 强制刷新视图
-        return True
-
-    def _update_radius(self, context, event):
-        """更新半径值（确保Vector类型）"""
-        region = context.region
-        rv3d = context.region_data
-        obj = context.edit_object
-        center_3d = self.data.center
-        center_3d = obj.matrix_world @ center_3d
-        center_2d = _3d_to_2d(region, rv3d, center_3d)
-
-        if not center_2d:
-            print("Warning: Failed to calculate 2D center for radius update.")
-            return
-
-        current_pos = Vector((event.mouse_region_x, event.mouse_region_y))
-        delta = current_pos - center_2d
-
-        scale_factor = context.space_data.overlay.grid_scale * 0.1
-        new_radius = delta.length * scale_factor
-
-        # 避免半径瞬间变大，平滑过渡
-        if new_radius < self.data.radius:
-            self.data.radius = new_radius
-        else:
-            min_increase = 0.1  # 最小增长值
-            if new_radius - self.data.radius < min_increase:
-                new_radius = self.data.radius + min_increase
-            self.data.radius += (new_radius - self.data.radius) * 0.1
-
-        self.data.update_draw = True  # 标记需要更新绘制数据
-        context.area.tag_redraw()  # 强制刷新视图
-
-    def _finalize_adjustment(self, context):
-        """完成半径调整，应用软选择，同时隐藏圆环"""
-        bpy.context.scene.tool_settings.proportional_distance = get_proportional_distance(self.data.radius)
-        self.data.radius = 0.0
-        if self.data.ring_handler:
-            bpy.types.SpaceView3D.draw_handler_remove(self.data.ring_handler, 'WINDOW')
-            self.data.ring_handler = None
-        if self.data.text_handler:
-            bpy.types.SpaceView3D.draw_handler_remove(self.data.text_handler, 'WINDOW')
-            self.data.text_handler = None
-        self.data.state = self.data.MAIN
-        self.data.update_draw = True  # 标记需要更新绘制数据
-        context.area.tag_redraw()  # 强制刷新视图
-        self.update_header(context)  # 更新状态文本
-
-    def _update_data_state(self, context, event):
-        if event.type == 'B':
-            if event.value == 'PRESS':
-                current_time = time.time()
-                if self.data.b_released and current_time - self.data.b_release_time < self.db_time:
-                    self.data.b_double_clicked = True
-                    self.cancel(context)
-                    return {'CANCELLED'}
-                else:
-                    self.data.b_clicked = True  # 标记 B 键单击
-                    self.data.b_pressed = True
-                    self.data.b_released = False
-            elif event.value == 'RELEASE':
-                self.data.b_pressed = False
-                self.data.b_released = True
-                self.data.b_release_time = time.time()
-                self.data.b_double_clicked = False  # 重置双击状态
-                self.data.b_clicked = False  # 重置单击状态
-        if event.type == 'MIDDLEMOUSE':
-            if event.value == 'PRESS':
-                self.data.mmb_pressed = True
-                self.data.mmb_released = False
-            elif event.value == 'RELEASE':
-                self.data.mmb_pressed = False
-                self.data.mmb_released = True
+        print("操作符实例已创建")
 
     def modal(self, context, event):
         if event.type == 'ESC':
@@ -433,32 +427,29 @@ class VIEW3D_OT_MaYa_soft_selection(bpy.types.Operator):
             self.data.update_draw = True
             return {'PASS_THROUGH'}
 
-        # 更新数据状态
-        result = self._update_data_state(context, event)
+        result = update_data_state(context, event, self.data, self.db_time)
         if result:
             return result
 
-        # Alt 按键处理
         if event.alt and self.data.mmb_pressed:
             return {'PASS_THROUGH'}
 
-        # B 按下状态下的 MMB 处理
         if self.data.b_pressed:
             if self.data.mmb_pressed:
                 if self.data.state == self.data.MAIN:
-                    if self._init_adjustment(context, event):
+                    if init_adjustment(context, event, self.data):
                         self.data.state = self.data.ADJUSTING
                         self.data.ring_handler = bpy.types.SpaceView3D.draw_handler_add(draw_radius_ring, (context,),
                                                                                         'WINDOW', 'POST_PIXEL')
                         self.data.text_handler = bpy.types.SpaceView3D.draw_handler_add(draw_text_callback, (context,),
                                                                                         'WINDOW', 'POST_PIXEL')
-                        self.update_header(context)  # 更新状态文本
+                        update_header(context, self.data)
                         return {'RUNNING_MODAL'}
                 elif self.data.state == self.data.ADJUSTING:
-                    self._update_radius(context, event)
+                    update_radius(context, event, self.data)
                     return {'RUNNING_MODAL'}
             elif self.data.mmb_released and self.data.state == self.data.ADJUSTING:
-                self._finalize_adjustment(context)
+                finalize_adjustment(context, self.data)
                 return {'RUNNING_MODAL'}
 
         if event.type in {'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'LEFTMOUSE', 'RIGHTMOUSE'}:
@@ -466,22 +457,27 @@ class VIEW3D_OT_MaYa_soft_selection(bpy.types.Operator):
         return {'PASS_THROUGH'}
 
     def execute(self, context):
-        context.scene.tool_settings.use_proportional_edit = True
-        # 依据当前的网格选择模式设定 draw_mode
-        select_mode = context.tool_settings.mesh_select_mode
-        if select_mode[0]:
-            self.data.draw_mode = 'VERT'
-        elif select_mode[1]:
-            self.data.draw_mode = 'EDGE'
-        elif select_mode[2]:
-            self.data.draw_mode = 'FACE'
+        try:
+            print("开始执行 execute 方法")
+            context.scene.tool_settings.use_proportional_edit = True
+            select_mode = context.tool_settings.mesh_select_mode
+            if select_mode[0]:
+                self.data.draw_mode = 'VERT'
+            elif select_mode[1]:
+                self.data.draw_mode = 'EDGE'
+            elif select_mode[2]:
+                self.data.draw_mode = 'FACE'
 
-        if not self.data.overlay_handler:
-            self.data.overlay_handler = bpy.types.SpaceView3D.draw_handler_add(draw_soft_selection, (context,),
-                                                                               'WINDOW', 'POST_VIEW')
-        self.update_header(context)
-        context.window_manager.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
+            if not self.data.overlay_handler:
+                self.data.overlay_handler = bpy.types.SpaceView3D.draw_handler_add(draw_soft_selection, (context,),
+                                                                                   'WINDOW', 'POST_VIEW')
+            update_header(context, self.data)
+            context.window_manager.modal_handler_add(self)
+            print("execute 方法执行成功")
+            return {'RUNNING_MODAL'}
+        except Exception as e:
+            print(f"执行 execute 方法时出错: {e}")
+            return {'CANCELLED'}
 
     def cancel(self, context):
         context.scene.tool_settings.use_proportional_edit = False
@@ -502,13 +498,20 @@ class VIEW3D_OT_MaYa_soft_selection(bpy.types.Operator):
 # ----------------------- 注册 -----------------------
 
 def register():
-    bpy.utils.register_class(VIEW3D_OT_MaYa_soft_selection)
+    try:
+        bpy.utils.register_class(VIEW3D_OT_MaYa_soft_selection)
+        print("操作符注册成功")
+    except Exception as e:
+        print(f"操作符注册失败: {e}")
 
 
 def unregister():
-    bpy.utils.unregister_class(VIEW3D_OT_MaYa_soft_selection)
+    try:
+        bpy.utils.unregister_class(VIEW3D_OT_MaYa_soft_selection)
+        print("操作符注销成功")
+    except Exception as e:
+        print(f"操作符注销失败: {e}")
 
 
 if __name__ == "__main__":
     register()
-    
